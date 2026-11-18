@@ -1,9 +1,5 @@
 # Laboratorio de correo local en Debian 13
-
-Instalación y configuración de un servidor de correo de pruebas con Postfix, Dovecot y mailutils, utilizando Thunderbird como cliente.
-
-El laboratorio permite enviar y recibir mensajes entre cuentas locales sin utilizar un proveedor de correo externo.
-
+Laboratorio de correo local en Debian 13 con Postfix, Dovecot, Thunderbird y ClamAV. Incluye análisis antivirus de los correos mediante clamav-milter y pruebas de detección con EICAR.
 ## 1. Objetivos
 
 - Configurar Postfix para recibir y entregar correo local.
