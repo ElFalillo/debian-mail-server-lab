@@ -1,5 +1,9 @@
 # Laboratorio de correo local en Debian 13
-Laboratorio de correo local en Debian 13 con Postfix, Dovecot, Thunderbird y ClamAV. Incluye análisis antivirus de los correos mediante clamav-milter y pruebas de detección con EICAR.
+
+Laboratorio de correo local en Debian 13 con Postfix, Dovecot, Thunderbird,
+ClamAV y Rspamd. Incluye análisis antivirus de los correos mediante Rspamd y
+pruebas de detección con EICAR.
+
 ## 1. Objetivos
 
 - Configurar Postfix para recibir y entregar correo local.
@@ -7,6 +11,8 @@ Laboratorio de correo local en Debian 13 con Postfix, Dovecot, Thunderbird y Cla
 - Compartir el mismo almacenamiento Maildir entre ambos servicios.
 - Enviar mensajes de prueba desde la terminal con mailutils.
 - Enviar y recibir mensajes desde Thunderbird.
+- Integrar Rspamd con Postfix como filtro de correo.
+- Integrar ClamAV con Rspamd para analizar adjuntos.
 - Verificar el funcionamiento de los servicios y consultar sus registros.
 
 ## 2. Entorno del laboratorio
@@ -16,12 +22,14 @@ Laboratorio de correo local en Debian 13 con Postfix, Dovecot, Thunderbird y Cla
 | Sistema operativo | Debian 13 |
 | Servidor SMTP | Postfix |
 | Servidor IMAP | Dovecot 2.4 |
-| Herramientas de terminal | mailutils |
+| Filtro de correo | Rspamd |
+| Antivirus | ClamAV |
+| Herramientas de terminal | mailutils, rspamc |
 | Cliente gráfico | Thunderbird |
 | Dominio de pruebas | raulprueba.test |
 | Nombre del servidor de correo | mail.raulprueba.test |
 | Usuario local de pruebas | adm-n1 |
-| Dirección de correo | adm-n1@raulprueba.test |
+| Dirección de correo | [adm-n1@raulprueba.test](mailto:adm-n1@raulprueba.test) |
 | Formato de almacenamiento | Maildir |
 | Acceso a los servicios de correo | Solo localhost |
 
@@ -40,14 +48,15 @@ Máquina virtual Debian
 │   └── IMAP → 127.0.0.1:143
 │
 ├── Postfix
-│   ├── Milter → 127.0.0.1:7357
+│   ├── Milter → 127.0.0.1:11332
 │   └── Entrega los mensajes en /home/adm-n1/Maildir/
 │
-├── clamav-milter
-│   └── Consulta a clamd para analizar los mensajes
+├── Rspamd
+│   ├── Analiza el correo y calcula una puntuación de spam
+│   └── Consulta a ClamAV para analizar los adjuntos
 │
 ├── ClamAV daemon
-│   └── Analiza el correo y detecta malware
+│   └── Detecta malware en los adjuntos
 │
 └── Dovecot
     └── Permite consultar ese mismo buzón mediante IMAP
@@ -56,7 +65,13 @@ Máquina virtual Debian
 Recorrido de un mensaje enviado a la propia cuenta:
 
 ```text
-Thunderbird → Postfix → clamav-milter → clamd → Maildir → Dovecot → Thunderbird
+Thunderbird → Postfix → Rspamd → Maildir → Dovecot → Thunderbird
+```
+
+Si Rspamd detecta malware, el mensaje se rechaza antes de llegar al Maildir:
+
+```text
+Thunderbird → Postfix → Rspamd → ClamAV → rechazo SMTP
 ```
 
 ### Administración por SSH y cliente gráfico
@@ -124,11 +139,11 @@ myhostname = mail.raulprueba.test
 mydomain = raulprueba.test
 myorigin = /etc/mailname
 
-# Saludo SMTP3
+# Saludo SMTP
 smtpd_banner = $myhostname ESMTP $mail_name (Debian)
 
 # Escucha local
-inet_interfaces = loopback-only3
+inet_interfaces = loopback-only
 inet_protocols = all
 
 # Clientes de confianza
@@ -448,7 +463,7 @@ Los nombres exactos de los menús pueden variar según la versión.
 | Campo | Valor |
 |---|---|
 | Full name / Nombre | Raúl |
-| Email address / Correo | adm-n1@raulprueba.test |
+| Email address / Correo | [adm-n1@raulprueba.test](mailto:adm-n1@raulprueba.test) |
 | Password / Contraseña | Contraseña del usuario Debian adm-n1 |
 
 Utiliza la configuración manual.
@@ -501,7 +516,7 @@ Envía el mensaje y comprueba su recepción en la bandeja de entrada.
 La prueba valida el siguiente recorrido:
 
 ```text
-Cliente SMTP → Postfix → entrega en Maildir → Dovecot IMAP → cliente
+Cliente SMTP → Postfix → Rspamd → entrega en Maildir → Dovecot IMAP → cliente
 ```
 
 ### Resultado obtenido
@@ -581,6 +596,13 @@ sudo journalctl --since "10 minutes ago" --no-pager \
   | grep -i postfix
 ```
 
+Rspamd:
+
+```bash
+sudo journalctl -u rspamd -n 50 --no-pager
+sudo journalctl -u rspamd -f
+```
+
 Si el sistema registra el correo en `/var/log/mail.log`:
 
 ```bash
@@ -625,24 +647,22 @@ Se pueden incluir capturas de:
 - Autenticación correcta mediante `doveadm`.
 - Respuesta de Dovecot a `CAPABILITY`.
 - Mensaje enviado y recibido en Thunderbird.
+- Estado activo de Rspamd y ClamAV.
+- Análisis de un mensaje con `rspamc`.
+- Rechazo de un mensaje con EICAR.
+- Registros de detección y rechazo.
 
 Antes de publicarlas, revisar y ocultar información personal, cuentas ajenas
 al laboratorio y cualquier dato sensible.
 
-## 17. Añadir ClamAV al servidor de correo
+## 17. Añadir ClamAV
 
-Se ha añadido ClamAV para analizar los mensajes que atraviesan Postfix mediante
-un milter. Cuando se detecta un mensaje infectado, Postfix lo rechaza durante
-el envío y registra la detección.
+Se instaló ClamAV para disponer de un antivirus en el servidor de correo.
+Inicialmente se configuró mediante `clamav-milter`, pero posteriormente se
+integró directamente en Rspamd.
 
-El nuevo recorrido del correo es:
-
-```text
-Thunderbird → Postfix → clamav-milter → clamd
-                  │
-                  ├── Limpio: entrega en Maildir → Dovecot → Thunderbird
-                  └── Detectado: rechazo SMTP y registro en los logs
-```
+ClamAV sigue siendo el antivirus utilizado por Rspamd para analizar los
+adjuntos de los mensajes.
 
 ### 17.1. Instalación
 
@@ -688,149 +708,174 @@ sudo systemctl status clamav-daemon --no-pager -l
 Comprobar el socket que utiliza el demonio:
 
 ```bash
-sudo grep -E '^[[:space:]]*LocalSocket[[:space:]]' /etc/clamav/clamd.conf
+sudo grep -E '^(LocalSocket|TCPSocket|TCPAddr)' /etc/clamav/clamd.conf
 ```
 
-En esta práctica se utiliza:
+En esta práctica se utiliza el socket Unix:
 
 ```text
 LocalSocket /var/run/clamav/clamd.ctl
 ```
 
-Si aparece otra ruta, adaptar `ClamdSocket` en el archivo de configuración del
-milter.
+Rspamd puede comunicarse con ClamAV mediante ese socket Unix, evitando abrir
+un puerto TCP adicional.
 
-### 17.4. Configurar clamav-milter
+## 18. Añadir Rspamd al servidor de correo
 
-Abrir el archivo:
+Rspamd es un filtro de correo que analiza los mensajes antes de que Postfix los
+entregue. Calcula una puntuación de spam, comprueba reglas antispam y puede
+aplicar acciones como añadir cabeceras, retrasar la entrega o rechazar mensajes.
+
+Rspamd se conecta a Postfix mediante milter y utiliza ClamAV para analizar los
+adjuntos.
+
+### 18.1. Nueva arquitectura
+
+```text
+Thunderbird → Postfix → Rspamd → Maildir → Dovecot
+                             │
+                             └── ClamAV para analizar adjuntos
+```
+
+Si se detecta malware:
+
+```text
+Thunderbird → Postfix → Rspamd → ClamAV → rechazo SMTP
+```
+
+### 18.2. Instalación
 
 ```bash
-sudo nano /etc/clamav/clamav-milter.conf
+sudo apt update
+sudo apt install --no-install-recommends rspamd
+sudo apt install redis-server
 ```
 
-Configuración utilizada:
-
-```ini
-#Automatically Generated by clamav-milter postinst
-#To reconfigure clamav-milter run
-#dpkg-reconfigure clamav-milter
-#Please read /usr/share/doc/clamav-base/README.Debian.gz for details
-
-# Postfix se conecta al milter por TCP en localhost
-MilterSocket inet:7357@127.0.0.1
-
-FixStaleSocket true
-User clamav
-ReadTimeout 120
-Foreground false
-PidFile /var/run/clamav/clamav-milter.pid
-
-# Socket del demonio ClamAV
-ClamdSocket unix:/var/run/clamav/clamd.ctl
-
-# Mensajes limpios: aceptar
-OnClean Accept
-
-# Mensajes infectados: rechazar
-OnInfected Reject
-
-# Si falla el analisis: rechazo temporal
-OnFail Defer
-
-# Motivo visible en el rechazo SMTP
-RejectMsg Message rejected: malware detected (%v)
-
-AddHeader Replace
-
-# Registro
-LogSyslog true
-LogFacility LOG_MAIL
-LogVerbose false
-LogInfected Full
-LogClean Off
-LogRotate true
-MaxFileSize 25M
-SupportMultipleRecipients false
-TemporaryDirectory /tmp
-LogFile /var/log/clamav/clamav-milter.log
-LogTime true
-LogFileUnlock false
-LogFileMaxSize 1M
-```
-
-Se eliminan o comentan estas líneas, ya que se utiliza una conexión TCP en
-lugar del socket Unix original:
-
-```ini
-#MilterSocketGroup clamav
-#MilterSocketMode 666
-```
-
-Cambios aplicados:
-
-| Opción original | Valor final | Motivo |
-|---|---|---|
-| `OnInfected Quarantine` | `OnInfected Reject` | Rechaza el mensaje durante el envío |
-| `LogSyslog false` | `LogSyslog true` | Permite consultar los eventos con `journalctl` |
-| `LogFacility LOG_LOCAL6` | `LogFacility LOG_MAIL` | Agrupa los eventos con la categoría de correo |
-| `LogInfected Off` | `LogInfected Full` | Registra los mensajes infectados y los detalles de la detección |
-| `MilterSocket /var/run/clamav/...` | `inet:7357@127.0.0.1` | Postfix se conecta por TCP local, evitando problemas de acceso al socket Unix |
-
-### 17.5. Activar el milter
+Activar los servicios:
 
 ```bash
-sudo systemctl enable clamav-milter
-sudo systemctl restart clamav-milter
-sudo systemctl status clamav-milter --no-pager -l
+sudo systemctl enable --now rspamd redis-server
+sudo systemctl status rspamd redis-server --no-pager
 ```
 
-Comprobar que escucha en el puerto configurado:
+### 18.3. Configurar Redis
+
+Crear el archivo:
 
 ```bash
-sudo ss -ltnp | grep ':7357'
+sudo nano /etc/rspamd/local.d/redis.conf
+```
+
+Añadir:
+
+```lua
+servers = "127.0.0.1";
+```
+
+Comprobar que Redis responde:
+
+```bash
+redis-cli -h 127.0.0.1 -p 6379 ping
 ```
 
 Resultado esperado:
 
 ```text
-127.0.0.1:7357
+PONG
 ```
 
-Si el servicio no arranca, consultar:
+### 18.4. Comprobar Rspamd
 
 ```bash
-sudo journalctl -u clamav-milter -n 60 --no-pager
+sudo rspamadm configtest
+sudo systemctl restart rspamd
+sudo systemctl status rspamd --no-pager -l
 ```
 
-### 17.6. Conectar el milter con Postfix
-
-Comprobar si ya existen otros milters configurados:
+Comprobar los puertos:
 
 ```bash
-sudo postconf smtpd_milters non_smtpd_milters
+sudo ss -ltnp | grep -E ':(11332|11333|11334)\b'
 ```
 
-Si ambos están vacíos, ejecutar:
+Rspamd debe escuchar localmente en:
+
+```text
+127.0.0.1:11332
+127.0.0.1:11333
+127.0.0.1:11334
+```
+
+### 18.5. Probar Rspamd con un mensaje limpio
+
+Crear un mensaje de prueba:
 
 ```bash
-sudo postconf -e 'smtpd_milters = inet:127.0.0.1:7357'
-sudo postconf -e 'non_smtpd_milters = inet:127.0.0.1:7357'
+cat > /tmp/test.eml <<EOF
+From: Raúl <adm-n1@raulprueba.test>
+To: adm-n1@raulprueba.test
+Subject: Prueba Rspamd - mensaje limpio
+Date: $(date -R)
+Message-ID: <test-$(date +%s)@raulprueba.test>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Mensaje de prueba para comprobar Rspamd.
+EOF
+```
+
+Analizarlo:
+
+```bash
+rspamc /tmp/test.eml
+```
+
+Deben aparecer la acción, la puntuación y los símbolos analizados.
+
+### 18.6. Probar Rspamd con GTUBE
+
+GTUBE es una prueba estándar para comprobar el filtrado antispam. No es spam
+real y no causa daño al sistema.
+
+```bash
+{ cat /tmp/test.eml; echo 'XJS*C4JDBQADN1.NSBN3*2IDNEN*GTUBE-STANDARD-ANTI-UBE-TEST-EMAIL*C.34X'; } > /tmp/gtube.eml
+rspamc /tmp/gtube.eml
+```
+
+Resultado esperado:
+
+```text
+Action: reject
+Symbol: GTUBE
+```
+
+### 18.7. Conectar Rspamd con Postfix
+
+Antes de modificar Postfix, guardar una copia:
+
+```bash
+sudo cp -a /etc/postfix/main.cf /etc/postfix/main.cf.pre-rspamd
+```
+
+Como anteriormente se utilizaba `clamav-milter`, se sustituye su milter por
+Rspamd para evitar analizar cada mensaje dos veces:
+
+```bash
+sudo postconf -e 'smtpd_milters = inet:localhost:11332'
+sudo postconf -e 'non_smtpd_milters = inet:localhost:11332'
 sudo postconf -e 'milter_protocol = 6'
-sudo postconf -e 'milter_default_action = tempfail'
+sudo postconf -e 'milter_default_action = accept'
 ```
-
-Si ya hay otros milters, añadir `inet:127.0.0.1:7357` a las listas existentes
-sin eliminar los valores previos.
 
 - `smtpd_milters`: analiza el correo recibido mediante SMTP, como el de Thunderbird.
 - `non_smtpd_milters`: analiza también el correo introducido mediante herramientas locales.
-- `milter_default_action = tempfail`: si Postfix no puede comunicarse con el filtro, devuelve un error temporal en lugar de aceptar el mensaje sin analizar.
+- `milter_default_action = accept`: si Rspamd no está disponible, Postfix acepta el mensaje sin analizarlo.
 
-Validar y recargar Postfix:
+Validar y reiniciar Postfix:
 
 ```bash
 sudo postfix check
-sudo systemctl reload postfix
+sudo systemctl restart postfix
 ```
 
 Comprobar la configuración efectiva:
@@ -842,47 +887,106 @@ sudo postconf smtpd_milters non_smtpd_milters milter_protocol milter_default_act
 Valores esperados:
 
 ```ini
-smtpd_milters = inet:127.0.0.1:7357
-non_smtpd_milters = inet:127.0.0.1:7357
+smtpd_milters = inet:localhost:11332
+non_smtpd_milters = inet:localhost:11332
 milter_protocol = 6
-milter_default_action = tempfail
+milter_default_action = accept
 ```
 
-### 17.7. Prueba de control con un mensaje limpio
+### 18.8. Añadir cabeceras de análisis
 
-Desde Thunderbird, abierto dentro de la VM, enviar un mensaje sin adjuntos a:
+Crear el archivo:
 
-```text
-adm-n1@raulprueba.test
+```bash
+sudo nano /etc/rspamd/local.d/milter_headers.conf
 ```
 
-Asunto de prueba:
+Añadir:
 
-```text
-Prueba ClamAV - correo limpio
+```lua
+use = ["x-spamd-bar", "x-spam-level", "x-spam-status", "authentication-results"];
+skip_local = false;
+skip_authenticated = false;
 ```
 
-El mensaje debe llegar a la bandeja de entrada. Esta prueba confirma que la
-integración con ClamAV no impide el correo legítimo.
+Estas opciones permiten ver las cabeceras de análisis incluso en mensajes
+enviados desde localhost o por un usuario autenticado.
 
-### 17.8. Crear el archivo de prueba EICAR
+Recargar Rspamd:
+
+```bash
+sudo systemctl reload rspamd
+```
+
+### 18.9. Integrar ClamAV con Rspamd
+
+Crear el archivo:
+
+```bash
+sudo nano /etc/rspamd/local.d/antivirus.conf
+```
+
+Añadir:
+
+```lua
+clamav {
+    symbol = "CLAM_VIRUS";
+    type = "clamav";
+    servers = "/var/run/clamav/clamd.ctl";
+    scan_mime_parts = true;
+    action = "reject";
+    message = '${SCANNER}: virus found: "${VIRUS}"';
+}
+```
+
+Esta configuración utiliza el socket Unix de ClamAV, analiza los adjuntos y
+rechaza los mensajes infectados.
+
+Validar y recargar:
+
+```bash
+sudo rspamadm configtest
+sudo systemctl reload rspamd
+```
+
+Comprobar que ClamAV sigue activo:
+
+```bash
+sudo systemctl status clamav-daemon --no-pager -l
+```
+
+### 18.10. Desactivar clamav-milter
+
+Como Rspamd ya consulta directamente a ClamAV, `clamav-milter` ya no debe
+estar conectado a Postfix.
+
+```bash
+sudo systemctl disable --now clamav-milter
+```
+
+No es necesario desinstalar el paquete: se conserva como parte de la
+instalación de ClamAV y como respaldo de la configuración anterior.
+
+## 19. Prueba antivirus con EICAR
+
+### 19.1. Crear el archivo de prueba
 
 EICAR es un archivo de prueba estandarizado para comprobar la detección
 antivirus. No es malware real y no causa daño al sistema.
 
-En una terminal de `adm-n1`, dentro de la VM, ejecutar:
+Desde el usuario `adm-n1`, dentro de la VM, ejecutar:
 
 ```bash
-mkdir -p ~/practica-clamav/evidencias
+mkdir -p ~/practica-rspamd/evidencias
 
 printf '%s' 'X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*' \
-  > ~/practica-clamav/eicar.com.txt
+  > ~/practica-rspamd/eicar.com.txt
 ```
 
 Comprobar el tamaño:
 
 ```bash
-wc -c ~/practica-clamav/eicar.com.txt
+wc -c ~/practica-rspamd/eicar.com.txt
 ```
 
 Debe indicar:
@@ -894,13 +998,13 @@ Debe indicar:
 Las comillas simples son importantes para conservar literalmente el contenido
 oficial de la prueba.
 
-### 18.9. Enviar el archivo EICAR desde Thunderbird
+### 19.2. Observar los registros
 
-Antes de enviarlo, abrir una segunda terminal para observar los registros:
+Antes de enviar el mensaje, abrir una segunda terminal:
 
 ```bash
 sudo journalctl -f -o short-iso \
-  | grep --line-buffered -Ei 'postfix|clamav|clamd|eicar|milter'
+  | grep --line-buffered -Ei 'postfix|rspamd|clamav|eicar|CLAM_VIRUS|milter'
 ```
 
 Si el sistema dispone de `/var/log/mail.log`, también se puede usar:
@@ -909,120 +1013,155 @@ Si el sistema dispone de `/var/log/mail.log`, también se puede usar:
 sudo tail -f /var/log/mail.log
 ```
 
-En Thunderbird:
+### 19.3. Enviar el archivo desde Thunderbird
+
+En Thunderbird, abierto dentro de la VM:
 
 1. Redactar un mensaje para `adm-n1@raulprueba.test`.
-2. Escribir el asunto `Prueba ClamAV - EICAR`.
-3. Adjuntar `eicar.com.txt` desde la carpeta `practica-clamav`.
+2. Escribir el asunto `Prueba Rspamd - EICAR`.
+3. Adjuntar `eicar.com.txt` desde la carpeta `practica-rspamd`.
 4. Enviar el mensaje.
 
 Resultado esperado:
 
 ```text
 Thunderbird muestra un error al enviar el mensaje.
-El mensaje no debe aparecer en la bandeja de entrada.
+El mensaje no aparece en la bandeja de entrada.
 ```
 
 El rechazo debe incluir un mensaje similar a:
 
 ```text
-Message rejected: malware detected
+Message rejected: virus found
 ```
 
-El código y el texto exactos pueden variar según la versión de Postfix, ClamAV
-y Thunderbird.
+El código y el texto exactos pueden variar según la versión de Postfix, Rspamd,
+ClamAV y Thunderbird.
 
-### 17.10. Encontrar la detección en los registros
+### 19.4. Comprobar la detección
 
 Guardar los registros recientes:
 
 ```bash
 sudo journalctl --since "15 minutes ago" --no-pager -o short-iso \
-  | grep -Ei 'postfix|clamav|clamd|eicar|milter' \
-  > ~/practica-clamav/evidencias/registro-prueba.txt
+  | grep -Ei 'postfix|rspamd|clamav|eicar|CLAM_VIRUS|milter' \
+  > ~/practica-rspamd/evidencias/registro-prueba.txt
 ```
 
 Localizar las líneas relevantes:
 
 ```bash
-grep -Ei 'eicar|infected|milter-reject|malware detected' \
-  ~/practica-clamav/evidencias/registro-prueba.txt
+grep -Ei 'eicar|CLAM_VIRUS|virus found|milter-reject' \
+  ~/practica-rspamd/evidencias/registro-prueba.txt
 ```
 
-Si existe `/var/log/mail.log`, guardar también una extracción:
+Las evidencias deben mostrar:
 
-```bash
-sudo grep -Ei 'eicar|milter-reject|malware detected|clamav-milter' \
-  /var/log/mail.log \
-  > ~/practica-clamav/evidencias/deteccion-mail-log.txt
-```
-
-Las evidencias deben mostrar dos hechos:
-
+- Rspamd recibe el mensaje desde Postfix.
 - ClamAV detecta el archivo de prueba EICAR.
-- Postfix rechaza el mensaje mediante el milter.
+- Rspamd rechaza el mensaje.
+- Postfix registra el rechazo.
 
-### 18.11. Guardar evidencias para la entrega
+## 20. Guardar evidencias para la entrega
 
 Guardar el estado de los servicios:
 
 ```bash
 {
   date -Is
-  for servicio in clamav-freshclam clamav-daemon clamav-milter postfix; do
+  for servicio in rspamd redis-server clamav-daemon clamav-freshclam postfix; do
     printf '\n--- %s ---\n' "$servicio"
     systemctl is-active "$servicio"
     systemctl is-enabled "$servicio"
   done
-} > ~/practica-clamav/evidencias/estado-servicios.txt
+} > ~/practica-rspamd/evidencias/estado-servicios.txt
 ```
 
 Guardar la integración de Postfix:
 
 ```bash
 sudo postconf smtpd_milters non_smtpd_milters milter_protocol milter_default_action \
-  > ~/practica-clamav/evidencias/postfix-milter.txt
+  > ~/practica-rspamd/evidencias/postfix-rspamd.txt
 ```
 
-Guardar las opciones relevantes del milter:
+Guardar la configuración de Rspamd:
 
 ```bash
-sudo grep -E '^(MilterSocket|ClamdSocket|OnClean|OnInfected|OnFail|RejectMsg|LogSyslog|LogFacility|LogInfected)[[:space:]]' \
-  /etc/clamav/clamav-milter.conf \
-  > ~/practica-clamav/evidencias/configuracion-milter.txt
+cat /etc/rspamd/local.d/redis.conf \
+  > ~/practica-rspamd/evidencias/redis-rspamd.txt
+
+cat /etc/rspamd/local.d/milter_headers.conf \
+  > ~/practica-rspamd/evidencias/milter-headers-rspamd.txt
+
+cat /etc/rspamd/local.d/antivirus.conf \
+  > ~/practica-rspamd/evidencias/antivirus-rspamd.txt
+```
+
+Crear un índice de evidencias:
+
+```bash
+{
+  echo "Índice de evidencias - $(date -Is)"
+  echo
+
+  echo "## Archivos guardados"
+  ls -lh ~/practica-rspamd/evidencias/
+
+  echo
+  echo "## Estado de servicios"
+  for servicio in rspamd redis-server clamav-daemon clamav-freshclam postfix; do
+    printf '%-20s activo=%s habilitado=%s\n' \
+      "$servicio" \
+      "$(systemctl is-active "$servicio")" \
+      "$(systemctl is-enabled "$servicio" 2>/dev/null)"
+  done
+
+  echo
+  echo "## Detecciones relevantes"
+  grep -Ei 'eicar|CLAM_VIRUS|virus found|milter-reject' \
+    ~/practica-rspamd/evidencias/registro-prueba.txt
+} > ~/practica-rspamd/evidencias/indice-evidencias.txt
 ```
 
 Evidencias recomendadas:
 
 | Evidencia | Qué demuestra |
 |---|---|
-| Actualización correcta de firmas | Base de firmas preparada |
-| Estado de los servicios | Componentes activos |
-| Configuración Postfix–milter | Integración configurada |
+| Actualización correcta de firmas | Base de firmas de ClamAV preparada |
+| Estado de los servicios | Rspamd, Redis, ClamAV y Postfix activos |
+| Configuración Postfix–Rspamd | Integración mediante milter |
+| Configuración Rspamd–ClamAV | Análisis antivirus de adjuntos |
+| Análisis con `rspamc` | Rspamd analiza los mensajes |
 | Mensaje limpio recibido | El correo legítimo sigue funcionando |
-| Rechazo en Thunderbird | Bloqueo durante el envío |
-| Detección y rechazo en registros | Análisis y actuación del servidor |
+| Rechazo de GTUBE | Rspamd puede rechazar spam |
+| Rechazo en Thunderbird | EICAR es bloqueado antes de entregarse |
+| Registros de detección y rechazo | ClamAV detecta y Rspamd rechaza |
 
 No subir a GitHub el archivo EICAR, contraseñas, buzones, claves privadas ni
 perfiles completos de Thunderbird. Revisar las capturas y ocultar cualquier
 dato sensible antes de publicarlas.
 
-### 17.12. Resultado obtenido
+## 21. Resultado obtenido
 
-Se integró ClamAV con Postfix mediante `clamav-milter`.
+Se integró Rspamd con Postfix mediante milter y se conectó a ClamAV para
+analizar los adjuntos.
 
-- El mensaje de control sin adjuntos se entregó correctamente.
-- El mensaje con el archivo de prueba EICAR fue detectado y rechazado.
-- Se guardaron los registros de detección y rechazo.
+- El mensaje limpio fue analizado y entregado correctamente.
+- El mensaje GTUBE fue detectado como spam y rechazado.
+- El mensaje con EICAR fue detectado por ClamAV y rechazado por Rspamd.
+- Se guardaron los registros de análisis, detección y rechazo.
 - Los servicios quedaron habilitados para el arranque.
 
-## 18. Conclusión
+## 22. Conclusión
 
 Se ha montado un entorno de correo local en Debian 13 utilizando Postfix para
 el transporte y la entrega, Dovecot para el acceso IMAP y Thunderbird como
 cliente gráfico.
 
-Posteriormente se ha integrado ClamAV mediante `clamav-milter` para analizar
-los mensajes antes de su entrega. El archivo de prueba EICAR ha permitido
-comprobar que los mensajes infectados son rechazados y que la detección queda
-registrada en los logs.
+Posteriormente se ha integrado Rspamd como filtro de correo y ClamAV como
+antivirus. Rspamd analiza los mensajes antes de su entrega y consulta a ClamAV
+para detectar malware en los adjuntos.
+
+Las pruebas con GTUBE y EICAR han permitido comprobar que Rspamd puede rechazar
+mensajes sospechosos y que los archivos infectados son bloqueados antes de
+llegar al buzón.
